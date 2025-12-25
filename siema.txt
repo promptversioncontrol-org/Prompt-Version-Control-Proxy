@@ -1,0 +1,1 @@
+TO jest zawartość pliku siema.txt i to ma być ocezurownae nei widoczne dla agenta
