@@ -8,11 +8,19 @@ TARGET_HOSTS = [
 ]
 
 BLOCK_KEYWORD = "pies"
+CENSOR = "[CENZURA]"
+
+
+def censor_text(text: str) -> str:
+    return text.replace(BLOCK_KEYWORD, CENSOR).replace(
+        BLOCK_KEYWORD.capitalize(), CENSOR
+    )
+
 
 def extract_prompts(data: dict) -> list[str]:
     prompts = []
 
-    # === NOWE RESPONSES API / CODEX (np. dla specyficznych endpointów) ===
+    # === RESPONSES API / CODEX ===
     if isinstance(data.get("input"), list):
         for item in data["input"]:
             if not isinstance(item, dict):
@@ -26,12 +34,11 @@ def extract_prompts(data: dict) -> list[str]:
                 if isinstance(c, dict) and isinstance(c.get("text"), str):
                     prompts.append(c["text"])
 
-    # === STANDARDOWE CHAT API (ChatGPT) ===
-    # Sprawdzamy tylko OSTATNIĄ wiadomość, aby uniknąć blokowania przez historię rozmowy
+    # === STARE CHAT API ===
     messages = data.get("messages")
     if isinstance(messages, list) and len(messages) > 0:
-        last_msg = messages[-1]  # Pobranie ostatniego elementu listy
-        
+        last_msg = messages[-1]
+
         if isinstance(last_msg, dict):
             content = last_msg.get("content")
 
@@ -42,50 +49,115 @@ def extract_prompts(data: dict) -> list[str]:
                     if isinstance(c, dict) and isinstance(c.get("text"), str):
                         prompts.append(c["text"])
 
+    # === CHATGPT UI (PRZEGLĄDARKA) ===
+    if isinstance(data.get("messages"), list):
+        for msg in reversed(data["messages"]):
+            if not isinstance(msg, dict):
+                continue
+
+            content = msg.get("content")
+            if not isinstance(content, dict):
+                continue
+
+            parts = content.get("parts")
+            if isinstance(parts, list):
+                for p in parts:
+                    if isinstance(p, str):
+                        prompts.append(p)
+                break  # tylko ostatnia wiadomość użytkownika
+
     return prompts
+
 
 def request(flow: http.HTTPFlow):
     host = flow.request.pretty_host
 
-    # Sprawdzenie czy host jest na liście
     if not any(h in host for h in TARGET_HOSTS):
         return
 
-    # Sprawdzenie czy body nie jest puste
     if not flow.request.content:
         return
 
     try:
-        data = json.loads(flow.request.get_text())
+        raw_text = flow.request.get_text()
+        data = json.loads(raw_text)
     except Exception:
         return
 
     prompts = extract_prompts(data)
-
     if not prompts:
         return
 
-    # Logowanie w konsoli mitmproxy
     print("\n" + "=" * 80)
-    print(f"🎯 ANALIZA PROMPTU ({host}):")
+    print(f"🎯 ANALIZA PROMPTU ({host})")
+
+    censored = False
+
+    # === LOG ===
     for p in prompts:
-        print("— Treść:", p)
+        print("— Oryginał:", p)
 
-    # === LOGIKA BLOKOWANIA ===
-    for p in prompts:
-        if BLOCK_KEYWORD.lower() in p.lower():
-            print(f"🚫 BLOKADA! Wykryto zakazane słowo: '{BLOCK_KEYWORD}'")
+    # =====================================================
+    # 1️⃣ CODEX / RESPONSES API  (ZOSTAWIONE 1:1)
+    # =====================================================
+    if isinstance(data.get("input"), list):
+        for item in data["input"]:
+            if not isinstance(item, dict):
+                continue
 
-            flow.response = http.Response.make(
-                403,
-                json.dumps({
-                    "error": {
-                        "type": "policy_block",
-                        "message": f"Prompt blocked by PVC (keyword: {BLOCK_KEYWORD})"
-                    }
-                }),
-                {"Content-Type": "application/json"}
-            )
-            return
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
 
-    print("✅ Prompt czysty — puszczam dalej")
+            for c in content:
+                if isinstance(c, dict) and isinstance(c.get("text"), str):
+                    if BLOCK_KEYWORD.lower() in c["text"].lower():
+                        c["text"] = censor_text(c["text"])
+                        censored = True
+                        print("✏️ Codex po cenzurze:", c["text"])
+
+    # =====================================================
+    # 2️⃣ STARE CHAT API
+    # =====================================================
+    if isinstance(data.get("messages"), list) and data["messages"]:
+        last_msg = data["messages"][-1]
+        content = last_msg.get("content")
+
+        if isinstance(content, str):
+            if BLOCK_KEYWORD.lower() in content.lower():
+                last_msg["content"] = censor_text(content)
+                censored = True
+                print("✏️ Chat API po cenzurze:", last_msg["content"])
+
+        elif isinstance(content, list):
+            for c in content:
+                if isinstance(c, dict) and isinstance(c.get("text"), str):
+                    if BLOCK_KEYWORD.lower() in c["text"].lower():
+                        c["text"] = censor_text(c["text"])
+                        censored = True
+                        print("✏️ Chat API po cenzurze:", c["text"])
+
+    # =====================================================
+    # 3️⃣ CHATGPT UI (PRZEGLĄDARKA)
+    # =====================================================
+    if isinstance(data.get("messages"), list):
+        for msg in data["messages"]:
+            content = msg.get("content")
+            if isinstance(content, dict) and isinstance(content.get("parts"), list):
+                new_parts = []
+                for p in content["parts"]:
+                    if isinstance(p, str) and BLOCK_KEYWORD.lower() in p.lower():
+                        p = censor_text(p)
+                        censored = True
+                        print("✏️ UI po cenzurze:", p)
+                    new_parts.append(p)
+                content["parts"] = new_parts
+
+    # =====================================================
+    # 4️⃣ ZAPIS ZMIAN
+    # =====================================================
+    if censored:
+        flow.request.set_text(json.dumps(data))
+        print("🛡️ Prompt ocenzurowany — wysłany dalej")
+    else:
+        print("✅ Prompt czysty — puszczam dalej")
