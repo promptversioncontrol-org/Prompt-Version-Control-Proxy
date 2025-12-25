@@ -1,0 +1,44 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+build/
+dist/
+*.spec
+
+# === Node.js / React ===
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp/
+.pnp.js
+
+# === Produkcja / Buildy ===
+build/
+dist/
+out/
+
+# === Mitmproxy / PVC Logs ===
+*.log
+# Jeśli skrypt zapisuje przechwycone prompty do pliku:
+captured_prompts.json
+# Jeśli używasz dumpów mitmproxy:
+flows.mitm
+
+# === IDE / OS ===
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# === Local Environment ===
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
